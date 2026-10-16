@@ -1,36 +1,74 @@
 import { Server } from "socket.io"
 import jwt from "jsonwebtoken"
-let users = []
+
+// Map of socket.id -> userName
+const activeSockets = new Map()
+
+export function getOnlineUsers() {
+    return Array.from(new Set(activeSockets.values()))
+}
 
 function initializeSocket(httpServer) {
+    const io = new Server(httpServer, {
+        cors: {
+            origin: "*",
+            methods: ["GET", "POST"]
+        }
+    })
 
-    const io = new Server(httpServer)
+    // Authentication middleware
+    io.use((socket, next) => {
+        const token = socket.handshake.auth?.token || socket.handshake.headers?.token
+        if (!token) {
+            return next(new Error("Authentication token is required"))
+        }
+
+        const secret = process.env.JWT_SECRET || "default_jwt_secret"
+        try {
+            const decoded = jwt.verify(token, secret)
+            socket.user = decoded
+            next()
+        } catch (err) {
+            return next(new Error("Invalid or expired authentication token"))
+        }
+    })
 
     io.on("connection", (socket) => {
-        console.log("A user connected:", socket.id)
+        const userName = socket.user?.name
+        console.log(`User connected: ${userName} (Socket: ${socket.id})`)
 
-        const token = socket.handshake.headers.token
-        const user = jwt.verify(token, process.env.JWT_SECRET)
+        const wasOnline = Array.from(activeSockets.values()).includes(userName)
+        activeSockets.set(socket.id, userName)
 
-        socket.broadcast.emit("online", user)
-
-        users.push(user.name)
-
-        socket.on("disconnect", () => {
-            socket.broadcast.emit("offline", user)
-            users = users.filter((u) => u !== user.name)
-        })
+        // Only broadcast online if this is the user's first active tab/connection
+        if (!wasOnline) {
+            socket.broadcast.emit("online", { name: userName })
+        }
 
         socket.on("message", (message) => {
-            // message = string sent by the client
-            socket.broadcast.emit("message", {
-                name: user.name,
-                message: message
-            })
+            if (typeof message === "string" && message.trim() !== "") {
+                socket.broadcast.emit("message", {
+                    name: userName,
+                    message: message.trim()
+                })
+            }
+        })
+
+        socket.on("disconnect", () => {
+            console.log(`User disconnected: ${userName} (Socket: ${socket.id})`)
+            activeSockets.delete(socket.id)
+
+            // Only broadcast offline if the user has no remaining active connections
+            const isStillOnline = Array.from(activeSockets.values()).includes(userName)
+            if (!isStillOnline) {
+                socket.broadcast.emit("offline", { name: userName })
+            }
         })
     })
 
     return io
 }
-export { users }
+
+// Keep export for backward compatibility
+export const users = getOnlineUsers()
 export default initializeSocket

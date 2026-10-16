@@ -1,29 +1,28 @@
 import { Router } from "express"
 import jwt from "jsonwebtoken"
-import { users } from "../sockets/server.socket.js"
-
+import { getOnlineUsers } from "../sockets/server.socket.js"
 
 const router = Router()
 
-
 router.post("/join", (req, res) => {
-    const { name } = req.body
-    if (!name) {
-        return res.status(400).json({ error: "Name is required" })
+    try {
+        const { name } = req.body
+        if (!name || typeof name !== "string" || name.trim() === "") {
+            return res.status(400).json({ error: "Name must be a non-empty string" })
+        }
+
+        const trimmedName = name.trim()
+        const secret = process.env.JWT_SECRET || "default_jwt_secret"
+        const token = jwt.sign({ name: trimmedName }, secret)
+
+        return res.status(200).json({ token, name: trimmedName })
+    } catch (err) {
+        return res.status(500).json({ error: "Failed to generate token" })
     }
-    if (typeof name !== "string" || name.trim() === "") {
-        return res.status(400).json({ error: "Name must be a non-empty string" })
-    }
-
-    const token = jwt.sign({ name }, process.env.JWT_SECRET)
-
-    res.status(200).json({ token })
-
 })
 
 router.get("/users", (req, res) => {
-    res.status(200).json({ users })
+    return res.status(200).json({ users: getOnlineUsers() })
 })
-
 
 export default router
